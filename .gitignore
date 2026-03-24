@@ -34,5 +34,6 @@ wheels/
 Thumbs.db
 
 # Project specific
-data/
-graphs/
+models/
+
+*.png
