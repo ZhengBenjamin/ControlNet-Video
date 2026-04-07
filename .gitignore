@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 build/
 develop-eggs/
@@ -35,5 +36,7 @@ Thumbs.db
 
 # Project specific
 models/
+output/
+data/
 
 *.png

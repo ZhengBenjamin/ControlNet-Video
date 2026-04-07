@@ -1,17 +1,37 @@
-import time
 
-def generate_image(pipe, prompt, output_path="output.png"):
-    """Generates an image from a prompt and saves it to the specified path"""
-
-    image = pipe(prompt).images[0]
-    image.save(output_path)
+from typing import Optional
 
 
-def generate_image_with_timing(pipe, prompt, output_path="output.png"):
-    """Generates an image and returns the generation time"""
-    start_time = time.time()
-    image = pipe(prompt).images[0]
-    generation_time = time.time() - start_time
-    
-    image.save(output_path)
-    return generation_time
+class Generator:
+
+    DEFAULT_IMAGE_SIZE = 1024
+
+    def __init__(self):
+        pass
+
+    def generate_image(
+        self,
+        pipe,
+        prompt,
+        output_path="output.png",
+        conditioning_image: Optional[object] = None,
+        width: int = DEFAULT_IMAGE_SIZE,
+        height: int = DEFAULT_IMAGE_SIZE,
+        num_inference_steps: int = 30,
+        controlnet_conditioning_scale: float = 1.0,
+    ):
+        """Generates a 384x384 image by default and optionally applies ControlNet conditioning."""
+
+        call_kwargs = {
+            "prompt": prompt,
+            "width": width,
+            "height": height,
+            "num_inference_steps": num_inference_steps,
+        }
+
+        if conditioning_image is not None:
+            call_kwargs["image"] = conditioning_image
+            call_kwargs["controlnet_conditioning_scale"] = controlnet_conditioning_scale
+
+        image = pipe(**call_kwargs).images[0]
+        image.save(output_path)
