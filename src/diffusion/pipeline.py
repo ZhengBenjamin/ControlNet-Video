@@ -1,30 +1,28 @@
 import torch
-from huggingface_hub import login
 from pathlib import Path
 
-from diffusers import StableDiffusionXLPipeline, StableDiffusion3Pipeline, StableDiffusionXLControlNetPipeline, ControlNetModel
+from diffusers import StableDiffusionPipeline, StableDiffusionControlNetPipeline, ControlNetModel
 from src.config import MODELS_DIR
 from typing import Optional
 
-DEFAULT_SDXL_CONTROLNET_PATH = MODELS_DIR / "controlnet-freihand-sdxl"
+DEFAULT_SD15_CONTROLNET_PATH = MODELS_DIR / "controlnet-freihand-sd15"
 
 class Pipeline():
     
-    def __init__(self, model_name: Optional[str] = None):
+    def __init__(self, model_name: Optional[str] = None, controlnet_path: Optional[Path] = None):
         
-        if model_name == "sdxl":
-            self.pipe = self.load_pipeline_sdxl()
-        elif model_name == "sd3":
-            self.pipe = self.load_pipeline_sd3()
+        if model_name == "sd15":
+            self.pipe = self.load_pipeline_sd15()
+        elif model_name == "sd15_controlnet":
+            if controlnet_path is None:
+                controlnet_path = DEFAULT_SD15_CONTROLNET_PATH
+            self.pipe = self.load_pipeline_sd15_controlnet(controlnet_path)
         else:
-            raise ValueError(f"Invalid model name: {model_name}. Must be 'sdxl' or 'sd3'")
+            raise ValueError(f"Invalid model name: {model_name}. Must be 'sd15' or 'sd15_controlnet'")
 
-
-    def load_pipeline_sd3(self) -> StableDiffusion3Pipeline:
-        login()
-
-        pipe = StableDiffusion3Pipeline.from_pretrained(
-            "stabilityai/stable-diffusion-3-medium-diffusers",
+    def load_pipeline_sd15(self) -> StableDiffusionPipeline:
+        pipe = StableDiffusionPipeline.from_pretrained(
+            "runwayml/stable-diffusion-v1-5",
             torch_dtype=torch.float16,
             cache_dir=str(MODELS_DIR)
         )
@@ -34,17 +32,22 @@ class Pipeline():
         
         return pipe
 
-    def load_pipeline_sdxl(self) -> StableDiffusionXLPipeline:
-
-        pipe = StableDiffusionXLPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-xl-base-1.0",
+    def load_pipeline_sd15_controlnet(self, controlnet_path: Path) -> StableDiffusionControlNetPipeline:
+        controlnet = ControlNetModel.from_pretrained(
+            controlnet_path,
             torch_dtype=torch.float16,
-            # variant="fp16",
+        )
+
+        pipe = StableDiffusionControlNetPipeline.from_pretrained(
+            "runwayml/stable-diffusion-v1-5",
+            controlnet=controlnet,
+            torch_dtype=torch.float16,
             cache_dir=str(MODELS_DIR),
         )
 
-        # pipe.enable_attention_slicing()
-        # pipe.enable_model_cpu_offload()
+        pipe.enable_attention_slicing()
+        pipe.enable_model_cpu_offload()
 
-        pipe.to("cuda")
+        return pipe
+
         return pipe

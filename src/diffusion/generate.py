@@ -1,10 +1,9 @@
-
 from typing import Optional
 
 
 class Generator:
 
-    DEFAULT_IMAGE_SIZE = 1024
+    DEFAULT_IMAGE_SIZE = 512
 
     def __init__(self):
         pass
@@ -20,7 +19,7 @@ class Generator:
         num_inference_steps: int = 30,
         controlnet_conditioning_scale: float = 1.0,
     ):
-        """Generates a 384x384 image by default and optionally applies ControlNet conditioning."""
+        """Generates an image and optionally applies ControlNet conditioning."""
 
         call_kwargs = {
             "prompt": prompt,

@@ -1,7 +1,5 @@
 
-import argparse
 import json
-import shutil
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -15,7 +13,7 @@ DEFAULT_FREIHAND_URL = (
 	"FreiHAND_pub_v2.zip"
 )
 
-DEFAULT_OUTPUT_SIZE = 1024
+DEFAULT_OUTPUT_SIZE = 512
 
 HAND_BONES: Tuple[Tuple[int, int], ...] = (
 	(0, 1),
@@ -143,9 +141,7 @@ def preprocess_freihand(dataset_root: Path,
 	k_all = load_json(k_path)
 	image_paths = sorted_image_files(rgb_dir)
 
-	sample_count = min(len(image_paths), len(xyz_all), len(k_all))
-	if limit > 0:
-		sample_count = min(sample_count, limit)
+	sample_count = 10000
 
 	images_out = output_root / "images"
 	cond_out = output_root / "conditioning_images"
@@ -209,8 +205,8 @@ def main() -> None:
 	output_dir = data_dir / "freihand_controlnet"
 	archive_path = archives_dir / "FreiHAND_pub_v2.zip"
 	
-	# download_file(DEFAULT_FREIHAND_URL, archive_path)
-	# extract_zip(archive_path, dataset_root)
+	download_file(DEFAULT_FREIHAND_URL, archive_path)
+	extract_zip(archive_path, dataset_root)
 	preprocess_freihand(
 		dataset_root=dataset_root,
 		output_root=output_dir,
