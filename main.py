@@ -1,5 +1,3 @@
-import os
-
 from scripts import *
 from pathlib import Path
 
@@ -18,7 +16,7 @@ def generate_sample_image() -> None:
 def train_controlnet(epochs: int = 1, batch_size: int = 1, learning_rate: float = 1e-5, max_samples: int = 50) -> None:
     from src.control.controlnet_train import ControlNetTrainer
     trainer = ControlNetTrainer()
-    trainer.train(num_epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, max_samples=max_samples, save_model=True)
+    trainer.train(num_epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, max_samples=max_samples)
 
 def generate_controlnet_image() -> None:
     from src.control.controlnet_train import ControlNetTrainer
@@ -28,7 +26,7 @@ def generate_controlnet_image() -> None:
         return
     
     trainer.generate_image(
-        prompt="a realistic human hand",
+        prompt="",
         conditioning_image_path=str(Path("data/freihand_controlnet/conditioning_images/00000000.png")),
         output_path="output_controlnet.png"
     )

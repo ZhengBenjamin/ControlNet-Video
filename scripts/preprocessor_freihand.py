@@ -141,7 +141,7 @@ def preprocess_freihand(dataset_root: Path,
 	k_all = load_json(k_path)
 	image_paths = sorted_image_files(rgb_dir)
 
-	sample_count = 10000
+	sample_count = 5000
 
 	images_out = output_root / "images"
 	cond_out = output_root / "conditioning_images"

@@ -49,5 +49,3 @@ class Pipeline():
         pipe.enable_model_cpu_offload()
 
         return pipe
-
-        return pipe
