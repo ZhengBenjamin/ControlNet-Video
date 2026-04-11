@@ -5,9 +5,12 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
+from typing import Any
 
 class FreiHandDataset(Dataset):
-    def __init__(self, data_root: Path, tokenizer, size=512):
+    """PyTorch Dataset for FreiHAND data with ControlNet conditioning"""
+    def __init__(self, data_root: Path, tokenizer: Any, size: int = 512) -> None:
+        """Initialize dataset with metadata from jsonl file"""
         self.data_root = data_root
         self.tokenizer = tokenizer
         self.size = size
@@ -15,35 +18,20 @@ class FreiHandDataset(Dataset):
         with open(data_root / "metadata.jsonl", "r") as f:
             self.metadata = [json.loads(line) for line in f]
 
-        # store in mem
-        self.image_cache = {}
-        self.cond_cache = {}
-        for item in self.metadata:
-            image_paht = self.data_root / item["file_name"]
-            cond_path = self.data_root / item["conditioning_image"]
-            image = Image.open(image_paht).convert("RGB").resize((size, size), Image.BILINEAR)
-            conditioning_image = Image.open(cond_path).convert("RGB").resize((size, size), Image.BILINEAR)
-            self.image_cache[item["file_name"]] = image
-            self.cond_cache[item["conditioning_image"]] = conditioning_image
-
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return total number of samples"""
         return len(self.metadata)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         item = self.metadata[idx]
 
-        # uncomment if no cache, mem constraint
+        image_path = self.data_root / item["file_name"]
+        image = Image.open(image_path).convert("RGB")
+        image = image.resize((self.size, self.size), Image.BILINEAR)
 
-        # image_path = self.data_root / item["file_name"]
-        # image = Image.open(image_path).convert("RGB")
-        # image = image.resize((self.size, self.size), Image.BILINEAR)
-
-        # cond_path = self.data_root / item["conditioning_image"]
-        # conditioning_image = Image.open(cond_path).convert("RGB")
-        # conditioning_image = conditioning_image.resize((self.size, self.size), Image.BILINEAR)
-
-        image = self.image_cache[item["file_name"]]
-        conditioning_image = self.cond_cache[item["conditioning_image"]]
+        cond_path = self.data_root / item["conditioning_image"]
+        conditioning_image = Image.open(cond_path).convert("RGB")
+        conditioning_image = conditioning_image.resize((self.size, self.size), Image.BILINEAR)
 
         # Tokenize caption
         caption = item["caption"]

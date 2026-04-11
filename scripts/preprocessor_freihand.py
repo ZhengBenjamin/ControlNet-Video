@@ -3,9 +3,10 @@ import json
 import os
 import urllib.request
 import zipfile
+import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import cv2
 import numpy as np
@@ -17,7 +18,7 @@ DEFAULT_FREIHAND_URL = (
 
 DEFAULT_OUTPUT_SIZE = 512
 
-HAND_BONES: Tuple[Tuple[int, int], ...] = (
+HAND_BONES = (
 	(0, 1),
 	(1, 2),
 	(2, 3),
@@ -40,7 +41,7 @@ HAND_BONES: Tuple[Tuple[int, int], ...] = (
 	(19, 20),
 )
 
-FINGER_COLORS: Tuple[Tuple[int, int, int], ...] = (
+FINGER_COLORS = (
 	(255, 64, 64),   # Thumb
 	(255, 160, 64),  # Index
 	(255, 220, 64),  # Middle
@@ -49,10 +50,12 @@ FINGER_COLORS: Tuple[Tuple[int, int, int], ...] = (
 )
 
 def ensure_dir(path: Path) -> None:
+	"""Create directory if it doesn't exist"""
 	path.mkdir(parents=True, exist_ok=True)
 
 
 def download_file(url: str, destination: Path) -> None:
+	"""Download file from URL with progress indicator"""
 	ensure_dir(destination.parent)
 	if destination.exists() and destination.stat().st_size > 0:
 		print(f"[download] Archive already exists: {destination}")
@@ -72,6 +75,7 @@ def download_file(url: str, destination: Path) -> None:
 
 
 def extract_zip(archive_path: Path, extract_to: Path) -> None:
+	"""Extract zip archive to destination directory"""
 	ensure_dir(extract_to)
 	print(f"[extract] Extracting {archive_path} -> {extract_to}")
 	with zipfile.ZipFile(archive_path, "r") as zf:
@@ -79,12 +83,14 @@ def extract_zip(archive_path: Path, extract_to: Path) -> None:
 	print("[extract] Completed")
 
 
-def load_json(path: Path):
+def load_json(path: Path) -> Any:
+	"""Load JSON file"""
 	with path.open("r", encoding="utf-8") as f:
 		return json.load(f)
 
 
 def project_xyz_to_uv(xyz: np.ndarray, k: np.ndarray) -> np.ndarray:
+	"""Project 3D joint coordinates to 2D image plane using camera intrinsics"""
 	homogeneous = (k @ xyz.T).T
 	z = np.clip(homogeneous[:, 2:3], 1e-6, None)
 	uv = homogeneous[:, :2] / z
@@ -92,6 +98,7 @@ def project_xyz_to_uv(xyz: np.ndarray, k: np.ndarray) -> np.ndarray:
 
 
 def draw_skeleton(joints_uv: np.ndarray, image_size: Tuple[int, int], line_thickness: int, joint_radius: int) -> np.ndarray:
+	"""Draw hand skeleton visualization on image"""
 	h, w = image_size
 	canvas = np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -120,11 +127,13 @@ def draw_skeleton(joints_uv: np.ndarray, image_size: Tuple[int, int], line_thick
 	return canvas
 
 def resize_pair(rgb: np.ndarray, control: np.ndarray, output_size: int) -> Tuple[np.ndarray, np.ndarray]:
+	"""Resize RGB and control images to target size"""
 	rgb_resized = cv2.resize(rgb, (output_size, output_size), interpolation=cv2.INTER_CUBIC)
 	control_resized = cv2.resize(control, (output_size, output_size), interpolation=cv2.INTER_NEAREST)
 	return rgb_resized, control_resized
 
 def sorted_image_files(image_dir: Path) -> List[Path]:
+	"""Get sorted list of image files from directory"""
 	files = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.png"))
 	files.sort(key=lambda p: p.name)
 	return files
@@ -133,6 +142,7 @@ def sorted_image_files(image_dir: Path) -> List[Path]:
 def process_one_sample(
 	task: Tuple[int, str, List[List[float]], List[List[float]], str, str, int, int, int]
 ) -> Optional[Tuple[int, Dict[str, str]]]:
+	"""Process single sample: project joints, draw skeleton, and save outputs"""
 	idx, image_path_str, xyz_entry, k_entry, images_out_str, cond_out_str, output_size, line_thickness, joint_radius = task
 
 	rgb_bgr = cv2.imread(image_path_str, cv2.IMREAD_COLOR)
@@ -178,7 +188,13 @@ def preprocess_freihand(dataset_root: Path,
 						line_thickness: int, 
 						joint_radius: int, 
 						limit: int,
-						num_workers: int = 0) -> None:
+						num_workers: int = 0,
+						auto_caption: bool = True,
+						caption_batch_size: int = 8,
+						caption_limit: int = 0,
+						caption_force: bool = False,
+						caption_model_name: str = "Salesforce/blip-image-captioning-base") -> None:
+	"""Preprocess FreiHAND dataset with skeleton visualization and optional captioning"""
 
 	rgb_dir = dataset_root / "training" / "rgb"
 	xyz_path, k_path = dataset_root / "training_xyz.json", dataset_root / "training_K.json"
@@ -187,8 +203,8 @@ def preprocess_freihand(dataset_root: Path,
 	k_all = load_json(k_path)
 	image_paths = sorted_image_files(rgb_dir)
 
-	# sample_count = min(len(image_paths), len(xyz_all), len(k_all))
-	sample_count = 1000
+	sample_count = min(len(image_paths), len(xyz_all), len(k_all))
+	
 	if limit > 0:
 		sample_count = min(sample_count, limit)
 
@@ -198,6 +214,10 @@ def preprocess_freihand(dataset_root: Path,
 	ensure_dir(cond_out)
 
 	metadata_path = output_root / "metadata.jsonl"
+	if metadata_path.exists():
+		print(f"[preprocess] Existing preprocessed data found at: {output_root}. Skipping.")
+		return
+
 	workers = num_workers if num_workers > 0 else max((os.cpu_count() or 1) - 1, 1)
 	print(f"[preprocess] Processing {sample_count} samples with {workers} workers")
 
@@ -238,9 +258,38 @@ def preprocess_freihand(dataset_root: Path,
 			if row is not None:
 				meta_fp.write(json.dumps(row) + "\n")
 
+	if auto_caption:
+		from scripts.caption_dataset import caption_metadata_file
+
+		print("[preprocess] Running BLIP auto-captioning")
+		caption_metadata_file(
+			dataset_root=output_root,
+			metadata_path=metadata_path,
+			batch_size=caption_batch_size,
+			limit=caption_limit,
+			force=caption_force,
+			model_name=caption_model_name,
+		)
+
 	print(f"[preprocess] Done. Output at: {output_root}")
 
+def parse_args() -> argparse.Namespace:
+	"""Parse command line arguments"""
+	parser = argparse.ArgumentParser(description="Preprocess FreiHAND for ControlNet")
+	parser.add_argument("--limit", type=int, default=0, help="Max number of samples to preprocess. 0 = all")
+	parser.add_argument("--num-workers", type=int, default=0, help="Worker count. 0 = auto")
+	parser.add_argument("--output-size", type=int, default=DEFAULT_OUTPUT_SIZE, help="Output square size")
+	parser.add_argument("--line-thickness", type=int, default=2, help="Skeleton line thickness")
+	parser.add_argument("--joint-radius", type=int, default=4, help="Skeleton joint radius")
+	parser.add_argument("--disable-auto-caption", action="store_true", help="Skip BLIP captioning after preprocess")
+	parser.add_argument("--caption-batch-size", type=int, default=128, help="BLIP caption batch size")
+	parser.add_argument("--caption-limit", type=int, default=0, help="Max captions to generate. 0 = all")
+	parser.add_argument("--caption-force", action="store_true", help="Overwrite existing captions")
+	return parser.parse_args()
+
+
 def main() -> None:
+	args = parse_args()
 	
 	data_dir = Path("data")
 	archives_dir = data_dir / "archives"
@@ -248,16 +297,21 @@ def main() -> None:
 	output_dir = data_dir / "freihand_controlnet"
 	archive_path = archives_dir / "FreiHAND_pub_v2.zip"
 	
-	download_file(DEFAULT_FREIHAND_URL, archive_path)
-	extract_zip(archive_path, dataset_root)
+	# download_file(DEFAULT_FREIHAND_URL, archive_path)
+	# extract_zip(archive_path, dataset_root)
 	preprocess_freihand(
 		dataset_root=dataset_root,
 		output_root=output_dir,
-		output_size=DEFAULT_OUTPUT_SIZE, # Output square image size
-		line_thickness=2, # Skeleton line thickness
-		joint_radius=4, # Skeleton joint circle radius 
-		limit=0, # Max num samples to preprocess, 0 = all
-		num_workers=0, # 0 = auto (cpu_count - 1)
+		output_size=args.output_size,
+		line_thickness=args.line_thickness,
+		joint_radius=args.joint_radius,
+		limit=args.limit,
+		num_workers=args.num_workers,
+		auto_caption=not args.disable_auto_caption,
+		caption_batch_size=args.caption_batch_size,
+		caption_limit=args.caption_limit,
+		caption_force=args.caption_force,
+		caption_model_name="Salesforce/blip-image-captioning-base",
 	)
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 import os 
-from typing import Optional
+from typing import Optional, Dict, Any, Tuple
 
 from src.utils import FreiHandDataset
 from tqdm import tqdm
@@ -19,7 +19,9 @@ os.environ.setdefault("NCCL_P2P_DISABLE", "1")
 os.environ.setdefault("NCCL_IB_DISABLE", "1")
 
 class ControlNetTrainer:
-    def __init__(self, model_dir: Path = MODELS_DIR / "controlnet-freihand-sd15"):
+    """Train ControlNet model on FreiHAND dataset"""
+    def __init__(self, model_dir: Path = MODELS_DIR / "controlnet-freihand-sd15") -> None:
+        """Initialize trainer with model directory and accelerator"""
         self.model_dir = model_dir
         self.training_state_path = self.model_dir / "training_state.pt"
         self.accelerator = Accelerator(
@@ -32,11 +34,12 @@ class ControlNetTrainer:
     def train(
             self, 
             data_root: Path = DATA_DIR / "freihand_controlnet", 
-            num_epochs=1, 
-            batch_size=1, 
-            learning_rate=1e-5, 
-            max_samples=10000,
-            resume: Optional[bool] = True):
+            num_epochs: int = 1, 
+            batch_size: int = 1, 
+            learning_rate: float = 1e-5, 
+            max_samples: int = 10000,
+            resume: Optional[bool] = True) -> None:
+        """Train ControlNet using distributed training with accelerate"""
         
         print(f"Training on {self.accelerator.num_processes} device(s)")
         if self.accelerator.is_main_process:
@@ -80,7 +83,7 @@ class ControlNetTrainer:
         if max_samples:
             dataset.metadata = dataset.metadata[:max_samples]
 
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
         optimizer = torch.optim.AdamW(controlnet.parameters(), lr=learning_rate)
 
         lr_scheduler = get_scheduler(
@@ -180,7 +183,8 @@ class ControlNetTrainer:
         
         print("Training completed!")
 
-    def generate_image(self, prompt: str, conditioning_image_path: str, output_path: str = "output_controlnet.png"):
+    def generate_image(self, prompt: str, conditioning_image_path: str, output_path: str = "output_controlnet.png") -> None:
+        """Generate single image with ControlNet conditioning"""
         
         device = torch.device("cuda:0") # some reason crash if using multiple gpus inf, temp fix
         torch.cuda.set_device(device)
@@ -210,8 +214,57 @@ class ControlNetTrainer:
         image.save(output_path)
         print(f"Image saved to {output_path}")
 
-    def get_model_source(self):
-        """Returns local source or get from remote repo if not"""
+    def generate_image_grid(
+        self,
+        prompt: str,
+        conditioning_image_path: str,
+        output_path: str = "output_controlnet_grid.png",
+        rows: int = 5,
+        cols: int = 5,
+        num_inference_steps: int = 20,
+        base_seed: int = 42) -> None:
+        """Generate grid of images with different random seeds"""
+        device = torch.device("cuda:0") # some reason crash if using multiple gpus inf, temp fix
+        torch.cuda.set_device(device)
+        sd15_source, use_local = self.get_model_source()
+
+        controlnet = ControlNetModel.from_pretrained(self.model_dir, torch_dtype=torch.float16)
+        pipe = StableDiffusionControlNetPipeline.from_pretrained(
+            sd15_source,
+            controlnet=controlnet,
+            torch_dtype=torch.float16,
+            local_files_only=use_local
+        )
+        pipe = pipe.to(device)
+        pipe.enable_attention_slicing()
+
+        conditioning_image = Image.open(conditioning_image_path).convert("RGB").resize((512, 512))
+
+        total = rows * cols
+        samples = []
+        for i in range(total):
+            generator = torch.Generator(device=device).manual_seed(base_seed + i)
+            sample = pipe(
+                prompt=prompt,
+                image=conditioning_image,
+                num_inference_steps=num_inference_steps,
+                controlnet_conditioning_scale=1.0,
+                generator=generator,
+            ).images[0]
+            samples.append(sample)
+
+        tile_w, tile_h = samples[0].size
+        grid = Image.new("RGB", (cols * tile_w, rows * tile_h))
+        for idx, sample in enumerate(samples):
+            x = (idx % cols) * tile_w
+            y = (idx // cols) * tile_h
+            grid.paste(sample, (x, y))
+
+        grid.save(output_path)
+        print(f"Grid image saved to {output_path}")
+
+    def get_model_source(self) -> Tuple[str | Path, bool]:
+        """Return local model source or fetch from remote repo"""
 
         repo_cache = MODELS_DIR / "models--runwayml--stable-diffusion-v1-5"
         refs_main = repo_cache / "refs" / "main"
@@ -230,8 +283,8 @@ class ControlNetTrainer:
 
         return "runwayml/stable-diffusion-v1-5", False
     
-    def _serialize_state(self, value):
-        """Recrusively move tensors to CPU and convert to float16 for serialization"""
+    def _serialize_state(self, value: Any) -> Any:
+        """Recursively move tensors to CPU and convert to float16 for serialization"""
         if isinstance(value, torch.Tensor):
             if value.is_floating_point():
                 return value.detach().cpu().to(torch.float16)
@@ -244,8 +297,8 @@ class ControlNetTrainer:
             return tuple(self._serialize_state(item) for item in value)
         return value
 
-    def _deserialize_state(self, value):
-        """Recrusively move tensors to accelerator device and keep float16 precision"""
+    def _deserialize_state(self, value: Any) -> Any:
+        """Recursively move tensors to accelerator device and keep float16 precision"""
         if isinstance(value, torch.Tensor):
             if value.is_floating_point():
                 return value.to(dtype=torch.float16, device=self.accelerator.device)
