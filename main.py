@@ -53,6 +53,6 @@ if __name__ == "__main__":
 
     # preprocess_freihand_data()
     # generate_sample_image()
-    train_controlnet(epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.learning_rate, max_samples=1000, resume=not args.restart)
-    if not args.skip_generate:
-        generate_controlnet_image()
+    train_controlnet(epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.learning_rate, max_samples=100, resume=not args.restart)
+    # if not args.skip_generate:
+    #     generate_controlnet_image()

@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 import os 
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Tuple
 
 from src.utils import FreiHandDataset
 from tqdm import tqdm
@@ -23,7 +23,7 @@ class ControlNetTrainer:
     def __init__(self, model_dir: Path = MODELS_DIR / "controlnet-freihand-sd15") -> None:
         """Initialize trainer with model directory and accelerator"""
         self.model_dir = model_dir
-        self.training_state_path = self.model_dir / "training_state.pt"
+        self.accelerator_state_dir = self.model_dir / "accelerator_state"
         self.accelerator = Accelerator(
             mixed_precision="fp16",
             gradient_accumulation_steps=4,
@@ -63,11 +63,14 @@ class ControlNetTrainer:
             local_files_only=use_local
         )
 
+        has_saved_weights = (self.model_dir / "config.json").exists()
+        has_accelerator_state = self.accelerator_state_dir.exists()
+
         # Resume if has existing weights
-        if resume and (self.model_dir / "config.json").exists():
+        if has_saved_weights and (resume or has_accelerator_state):
             print(f"Resume from weights {self.model_dir}")
             controlnet = ControlNetModel.from_pretrained(
-                self.model_dir, torch_dtype=torch.float16, local_files_only=True
+                self.model_dir, local_files_only=True
             )
         else:
             controlnet = ControlNetModel.from_unet(unet)
@@ -83,7 +86,8 @@ class ControlNetTrainer:
         if max_samples:
             dataset.metadata = dataset.metadata[:max_samples]
 
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+        num_workers = 0 if os.name == "nt" else 4
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         optimizer = torch.optim.AdamW(controlnet.parameters(), lr=learning_rate)
 
         lr_scheduler = get_scheduler(
@@ -115,12 +119,10 @@ class ControlNetTrainer:
             controlnet, unet, optimizer, dataloader, lr_scheduler 
         )
 
-        # load wieghts if resume
-        if resume and self.training_state_path.exists():
-            print("Loading weights from previous training state")
-            training_state = torch.load(self.training_state_path, map_location=self.accelerator.device)
-            optimizer.load_state_dict(self._deserialize_state(training_state["optimizer"]))
-            lr_scheduler.load_state_dict(self._deserialize_state(training_state["lr_scheduler"]))
+        if resume:
+            if has_accelerator_state:
+                print(f"Loading accelerator state from {self.accelerator_state_dir}")
+                self.accelerator.load_state(str(self.accelerator_state_dir))
     
         controlnet.train()
         for epoch in range(num_epochs):
@@ -159,7 +161,7 @@ class ControlNetTrainer:
                         mid_block_additional_residual=mid_block_res_sample,
                     ).sample
 
-                    loss = F.mse_loss(noise_pred.to(dtype=torch.float16), noise.to(dtype=torch.float16))
+                    loss = F.mse_loss(noise_pred.float(), noise.float())
 
                     self.accelerator.backward(loss)
                     optimizer.step()
@@ -169,14 +171,15 @@ class ControlNetTrainer:
         # Save model
         if self.accelerator.is_main_process:
             self.model_dir.mkdir(parents=True, exist_ok=True)
-            training_state = {
-                "optimizer": self._serialize_state(optimizer.state_dict()),
-                "lr_scheduler": self._serialize_state(lr_scheduler.state_dict()),
-            }
-            
-            torch.save(training_state, self.training_state_path)
+
+        self.accelerator.wait_for_everyone()
+
+        if self.accelerator.is_main_process:
             controlnet = self.accelerator.unwrap_model(controlnet)
             controlnet.save_pretrained(self.model_dir)
+
+        self.accelerator.save_state(str(self.accelerator_state_dir))
+        self.accelerator.wait_for_everyone()
         
         if hasattr(self.accelerator, "end_training"):
             self.accelerator.end_training()
@@ -223,6 +226,7 @@ class ControlNetTrainer:
         cols: int = 5,
         num_inference_steps: int = 20,
         base_seed: int = 42) -> None:
+
         """Generate grid of images with different random seeds"""
         device = torch.device("cuda:0") # some reason crash if using multiple gpus inf, temp fix
         torch.cuda.set_device(device)
@@ -282,31 +286,3 @@ class ControlNetTrainer:
                 return snapshot_candidates[0], True
 
         return "runwayml/stable-diffusion-v1-5", False
-    
-    def _serialize_state(self, value: Any) -> Any:
-        """Recursively move tensors to CPU and convert to float16 for serialization"""
-        if isinstance(value, torch.Tensor):
-            if value.is_floating_point():
-                return value.detach().cpu().to(torch.float16)
-            return value.detach().cpu()
-        if isinstance(value, dict):
-            return {key: self._serialize_state(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [self._serialize_state(item) for item in value]
-        if isinstance(value, tuple):
-            return tuple(self._serialize_state(item) for item in value)
-        return value
-
-    def _deserialize_state(self, value: Any) -> Any:
-        """Recursively move tensors to accelerator device and keep float16 precision"""
-        if isinstance(value, torch.Tensor):
-            if value.is_floating_point():
-                return value.to(dtype=torch.float16, device=self.accelerator.device)
-            return value.to(device=self.accelerator.device)
-        if isinstance(value, dict):
-            return {key: self._deserialize_state(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [self._deserialize_state(item) for item in value]
-        if isinstance(value, tuple):
-            return tuple(self._deserialize_state(item) for item in value)
-        return value
