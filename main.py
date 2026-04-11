@@ -13,10 +13,10 @@ def generate_sample_image() -> None:
     pipe = sd.pipe
     generator.generate_image(pipe, "cat", output_path="output.png")
 
-def train_controlnet(epochs: int = 1, batch_size: int = 1, learning_rate: float = 1e-5, max_samples: int = 50) -> None:
+def train_controlnet(epochs: int = 1, batch_size: int = 1, learning_rate: float = 1e-5, max_samples: int = 50, resume: bool = False) -> None:
     from src.control.controlnet_train import ControlNetTrainer
     trainer = ControlNetTrainer()
-    trainer.train(num_epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, max_samples=max_samples)
+    trainer.train(num_epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, max_samples=max_samples, resume=resume)
 
 def generate_controlnet_image() -> None:
     from src.control.controlnet_train import ControlNetTrainer
@@ -40,6 +40,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning-rate", type=float, default=1e-5, help="lr")
     parser.add_argument("--max-samples", type=int, default=50, help="max samples for train")
     parser.add_argument("--skip-generate", action="store_true", help="skip img generation after train")
+    parser.add_argument("--restart", action="store_true", help="start from a fresh instead of the last save")
     args = parser.parse_args()
 
     # preprocess_freihand_data()

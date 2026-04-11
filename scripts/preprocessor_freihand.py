@@ -1,9 +1,11 @@
 
 import json
+import os
 import urllib.request
 import zipfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -127,12 +129,56 @@ def sorted_image_files(image_dir: Path) -> List[Path]:
 	files.sort(key=lambda p: p.name)
 	return files
 
+
+def process_one_sample(
+	task: Tuple[int, str, List[List[float]], List[List[float]], str, str, int, int, int]
+) -> Optional[Tuple[int, Dict[str, str]]]:
+	idx, image_path_str, xyz_entry, k_entry, images_out_str, cond_out_str, output_size, line_thickness, joint_radius = task
+
+	rgb_bgr = cv2.imread(image_path_str, cv2.IMREAD_COLOR)
+	if rgb_bgr is None:
+		return None
+
+	xyz = np.array(xyz_entry, dtype=np.float32)
+	k = np.array(k_entry, dtype=np.float32)
+	uv = project_xyz_to_uv(xyz, k)
+
+	h, w = rgb_bgr.shape[:2]
+	uv[:, 0] = np.clip(uv[:, 0], 0, w - 1)
+	uv[:, 1] = np.clip(uv[:, 1], 0, h - 1)
+
+	control_bgr = draw_skeleton(
+		joints_uv=uv,
+		image_size=(h, w),
+		line_thickness=line_thickness,
+		joint_radius=joint_radius,
+	)
+
+	rgb_bgr, control_bgr = resize_pair(rgb_bgr, control_bgr, output_size)
+
+	out_name = f"{idx:08d}.png"
+	rgb_out_path = Path(images_out_str) / out_name
+	cond_out_path = Path(cond_out_str) / out_name
+
+	if not cv2.imwrite(str(rgb_out_path), rgb_bgr):
+		return None
+	if not cv2.imwrite(str(cond_out_path), control_bgr):
+		return None
+
+	row = {
+		"file_name": str(Path("images") / out_name).replace("\\", "/"),
+		"conditioning_image": str(Path("conditioning_images") / out_name).replace("\\", "/"),
+		"caption": "a realistic human hand",
+	}
+	return idx, row
+
 def preprocess_freihand(dataset_root: Path, 
 						output_root: Path, 
 						output_size: int, 
 						line_thickness: int, 
 						joint_radius: int, 
-						limit: int) -> None:
+						limit: int,
+						num_workers: int = 0) -> None:
 
 	rgb_dir = dataset_root / "training" / "rgb"
 	xyz_path, k_path = dataset_root / "training_xyz.json", dataset_root / "training_K.json"
@@ -141,7 +187,10 @@ def preprocess_freihand(dataset_root: Path,
 	k_all = load_json(k_path)
 	image_paths = sorted_image_files(rgb_dir)
 
-	sample_count = 5000
+	# sample_count = min(len(image_paths), len(xyz_all), len(k_all))
+	sample_count = 1000
+	if limit > 0:
+		sample_count = min(sample_count, limit)
 
 	images_out = output_root / "images"
 	cond_out = output_root / "conditioning_images"
@@ -149,51 +198,45 @@ def preprocess_freihand(dataset_root: Path,
 	ensure_dir(cond_out)
 
 	metadata_path = output_root / "metadata.jsonl"
-	print(f"[preprocess] Processing {sample_count} samples")
+	workers = num_workers if num_workers > 0 else max((os.cpu_count() or 1) - 1, 1)
+	print(f"[preprocess] Processing {sample_count} samples with {workers} workers")
+
+	tasks: List[Tuple[int, str, List[List[float]], List[List[float]], str, str, int, int, int]] = []
+	for idx in range(sample_count):
+		tasks.append(
+			(
+				idx,
+				str(image_paths[idx]),
+				xyz_all[idx],
+				k_all[idx],
+				str(images_out),
+				str(cond_out),
+				output_size,
+				line_thickness,
+				joint_radius,
+			)
+		)
+
+	rows_by_idx: Dict[int, Dict[str, str]] = {}
+	processed = 0
+
+	with ProcessPoolExecutor(max_workers=workers) as executor:
+		futures = [executor.submit(process_one_sample, task) for task in tasks]
+		for future in as_completed(futures):
+			result = future.result()
+			processed += 1
+			if result is not None:
+				idx, row = result
+				rows_by_idx[idx] = row
+
+			if processed % 500 == 0 or processed == sample_count:
+				print(f"[preprocess] {processed}/{sample_count}")
 
 	with metadata_path.open("w", encoding="utf-8") as meta_fp:
-		
 		for idx in range(sample_count):
-			image_path = image_paths[idx]
-			rgb_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-			
-			if rgb_bgr is None:
-				continue
-
-			xyz = np.array(xyz_all[idx], dtype=np.float32)
-			k = np.array(k_all[idx], dtype=np.float32)
-			uv = project_xyz_to_uv(xyz, k)
-
-			h, w = rgb_bgr.shape[:2]
-			uv[:, 0] = np.clip(uv[:, 0], 0, w - 1)
-			uv[:, 1] = np.clip(uv[:, 1], 0, h - 1)
-
-			control_bgr = draw_skeleton(
-				joints_uv=uv,
-				image_size=(h, w),
-				line_thickness=line_thickness,
-				joint_radius=joint_radius,
-			)
-
-			rgb_bgr, control_bgr = resize_pair(rgb_bgr, control_bgr, output_size)
-
-			out_name = f"{idx:08d}.png"
-			rgb_out_path = images_out / out_name
-			cond_out_path = cond_out / out_name
-
-			cv2.imwrite(str(rgb_out_path), rgb_bgr)
-			cv2.imwrite(str(cond_out_path), control_bgr)
-
-			row = {
-				"file_name": str(Path("images") / out_name).replace("\\", "/"),
-				"conditioning_image": str(Path("conditioning_images") / out_name).replace("\\", "/"),
-				"caption": "a realistic human hand"
-			}
-
-			meta_fp.write(json.dumps(row) + "\n")
-
-			if (idx + 1) % 500 == 0 or (idx + 1) == sample_count:
-				print(f"[preprocess] {idx + 1}/{sample_count}")
+			row = rows_by_idx.get(idx)
+			if row is not None:
+				meta_fp.write(json.dumps(row) + "\n")
 
 	print(f"[preprocess] Done. Output at: {output_root}")
 
@@ -211,9 +254,10 @@ def main() -> None:
 		dataset_root=dataset_root,
 		output_root=output_dir,
 		output_size=DEFAULT_OUTPUT_SIZE, # Output square image size
-		line_thickness=4, # Skeleton line thickness
-		joint_radius=6, # Skeleton joint circle radius 
-		limit=0 # Max num samples to preprocess, 0 = all
+		line_thickness=2, # Skeleton line thickness
+		joint_radius=4, # Skeleton joint circle radius 
+		limit=0, # Max num samples to preprocess, 0 = all
+		num_workers=0, # 0 = auto (cpu_count - 1)
 	)
 
 if __name__ == "__main__":
