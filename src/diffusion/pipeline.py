@@ -5,7 +5,7 @@ from diffusers import StableDiffusionPipeline, StableDiffusionControlNetPipeline
 from src.config import MODELS_DIR
 from typing import Optional, Union
 
-DEFAULT_SD15_CONTROLNET_PATH = MODELS_DIR / "controlnet-freihand-sd15"
+DEFAULT_SD15_CONTROLNET_PATH = MODELS_DIR / "controlnet-hagrid-sd15"
 
 class Pipeline:
     """Load and manage stable diffusion pipelines"""

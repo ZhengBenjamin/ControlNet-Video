@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import os 
 from typing import Optional, Tuple
 
-from src.utils import FreiHandDataset
+from src.utils import ControlNetImageDataset
 from tqdm import tqdm
 from diffusers.optimization import get_scheduler
 from torch.utils.data import DataLoader
@@ -19,8 +19,9 @@ os.environ.setdefault("NCCL_P2P_DISABLE", "1")
 os.environ.setdefault("NCCL_IB_DISABLE", "1")
 
 class ControlNetTrainer:
-    """Train ControlNet model on FreiHAND dataset"""
-    def __init__(self, model_dir: Path = MODELS_DIR / "controlnet-freihand-sd15") -> None:
+    """Train ControlNet model on image-conditioning-caption datasets."""
+    
+    def __init__(self, model_dir: Path = MODELS_DIR / "controlnet-hagrid-sd15") -> None:
         """Initialize trainer with model directory and accelerator"""
         self.model_dir = model_dir
         self.accelerator_state_dir = self.model_dir / "accelerator_state"
@@ -33,7 +34,7 @@ class ControlNetTrainer:
 
     def train(
             self, 
-            data_root: Path = DATA_DIR / "freihand_controlnet", 
+            data_root: Path = DATA_DIR / "hagrid_train", 
             num_epochs: int = 1, 
             batch_size: int = 1, 
             learning_rate: float = 1e-5, 
@@ -81,7 +82,7 @@ class ControlNetTrainer:
         unet.requires_grad_(False)
         
         vae = vae.to(self.accelerator.device, dtype=torch.float16)
-        dataset = FreiHandDataset(data_root, tokenizer, size=256) # load dataset
+        dataset = ControlNetImageDataset(data_root, tokenizer, size=256) # load dataset
 
         if max_samples:
             dataset.metadata = dataset.metadata[:max_samples]

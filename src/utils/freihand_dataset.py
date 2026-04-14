@@ -7,8 +7,8 @@ from PIL import Image
 from torch.utils.data import Dataset
 from typing import Any
 
-class FreiHandDataset(Dataset):
-    """PyTorch Dataset for FreiHAND data with ControlNet conditioning"""
+class ControlNetImageDataset(Dataset):
+    """PyTorch dataset for image+conditioning+caption ControlNet training."""
     def __init__(self, data_root: Path, tokenizer: Any, size: int = 512) -> None:
         """Initialize dataset with metadata from jsonl file"""
         self.data_root = data_root

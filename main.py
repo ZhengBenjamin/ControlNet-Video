@@ -3,8 +3,8 @@ from pathlib import Path
 from accelerate import Accelerator
 from src import *
 
-def preprocess_freihand_data() -> None:
-    """Preprocess FreiHAND dataset for training"""
+def preprocess_hagrid_data() -> None:
+    """Preprocess HAGRID dataset for training."""
     accelerator = Accelerator()
     if accelerator.is_main_process:
         preprocessor_freihand.main()
@@ -33,7 +33,7 @@ def generate_controlnet_image() -> None:
     
     trainer.generate_image_grid(
         prompt="",
-        conditioning_image_path=str(Path("data/freihand_controlnet/conditioning_images/00000000.png")),
+        conditioning_image_path=str(Path("data/hagrid_train/conditioning_images/0.png")),
         output_path="output_controlnet_5x5.png",
         rows=5,
         cols=5,
@@ -51,8 +51,8 @@ if __name__ == "__main__":
     parser.add_argument("--restart", action="store_true", help="start from a fresh instead of the last save")
     args = parser.parse_args()
 
-    # preprocess_freihand_data()
+    preprocess_hagrid_data()
     # generate_sample_image()
-    train_controlnet(epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.learning_rate, max_samples=100, resume=not args.restart)
+    # train_controlnet(epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.learning_rate, max_samples=100, resume=not args.restart)
     # if not args.skip_generate:
     #     generate_controlnet_image()
