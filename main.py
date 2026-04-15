@@ -1,13 +1,10 @@
 from scripts import *
 from pathlib import Path
-from accelerate import Accelerator
 from src import *
 
 def preprocess_hagrid_data() -> None:
     """Preprocess HAGRID dataset for training."""
-    accelerator = Accelerator()
-    if accelerator.is_main_process:
-        preprocessor_freihand.main()
+    training_preprocesor.main()
 
 def generate_sample_image() -> None:
     """Generate a sample image with stable diffusion"""
@@ -27,16 +24,21 @@ def generate_controlnet_image() -> None:
     """Generate images using trained ControlNet model"""
     from src.control.controlnet_train import ControlNetTrainer
     trainer = ControlNetTrainer()
-    
-    if not trainer.accelerator.is_main_process:
-        return
-    
+
     trainer.generate_image_grid(
         prompt="",
-        conditioning_image_path=str(Path("data/hagrid_train/conditioning_images/0.png")),
-        output_path="output_controlnet_5x5.png",
-        rows=5,
-        cols=5,
+        conditioning_image_path=str(Path("data/hagrid_train/conditioning_images/3.png")),
+        output_path="output_controlnet_10x101.png",
+        rows=10,
+        cols=10,
+    )
+
+    trainer.generate_image_grid(
+        prompt="A robotic hand",
+        conditioning_image_path=str(Path("data/hagrid_train/conditioning_images/3.png")),
+        output_path="output_controlnet_10x102.png",
+        rows=10,
+        cols=10,
     )
 
 if __name__ == "__main__":
@@ -51,8 +53,8 @@ if __name__ == "__main__":
     parser.add_argument("--restart", action="store_true", help="start from a fresh instead of the last save")
     args = parser.parse_args()
 
-    preprocess_hagrid_data()
+    # preprocess_hagrid_data()
     # generate_sample_image()
-    # train_controlnet(epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.learning_rate, max_samples=100, resume=not args.restart)
-    # if not args.skip_generate:
-    #     generate_controlnet_image()
+    # train_controlnet(epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.learning_rate, max_samples=10000, resume=not args.restart)
+    if not args.skip_generate:
+        generate_controlnet_image()

@@ -27,10 +27,15 @@ class ControlNetTrainer:
         self.accelerator_state_dir = self.model_dir / "accelerator_state"
         self.accelerator = Accelerator(
             mixed_precision="fp16",
-            gradient_accumulation_steps=4,
+            gradient_accumulation_steps=1,
             device_placement=True,
             split_batches=True,
         )
+
+    def _wait_for_everyone_if_distributed(self) -> None:
+        """Synchronize only when a torch distributed process group is active."""
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            self.accelerator.wait_for_everyone()
 
     def train(
             self, 
@@ -87,8 +92,18 @@ class ControlNetTrainer:
         if max_samples:
             dataset.metadata = dataset.metadata[:max_samples]
 
-        num_workers = 0 if os.name == "nt" else 4
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        num_workers = 4
+        dataloader_kwargs = {
+            "batch_size": batch_size,
+            "shuffle": True,
+            "num_workers": num_workers,
+            "pin_memory": torch.cuda.is_available(),
+        }
+        if num_workers > 0:
+            dataloader_kwargs["persistent_workers"] = True
+            dataloader_kwargs["prefetch_factor"] = 4
+
+        dataloader = DataLoader(dataset, **dataloader_kwargs)
         optimizer = torch.optim.AdamW(controlnet.parameters(), lr=learning_rate)
 
         lr_scheduler = get_scheduler(
@@ -130,7 +145,7 @@ class ControlNetTrainer:
             for step, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}")):
                 with self.accelerator.accumulate(controlnet):
                     # Move batch to device
-                    batch = {k: v.to(self.accelerator.device) for k, v in batch.items()}
+                    batch = {k: v.to(self.accelerator.device, non_blocking=True) for k, v in batch.items()}
 
                     with torch.no_grad():
                         latents = vae.encode(batch["pixel_values"].to(dtype=torch.float16)).latent_dist.sample() # encode latent 
@@ -173,25 +188,21 @@ class ControlNetTrainer:
         if self.accelerator.is_main_process:
             self.model_dir.mkdir(parents=True, exist_ok=True)
 
-        self.accelerator.wait_for_everyone()
+        self._wait_for_everyone_if_distributed()
 
         if self.accelerator.is_main_process:
             controlnet = self.accelerator.unwrap_model(controlnet)
             controlnet.save_pretrained(self.model_dir)
 
         self.accelerator.save_state(str(self.accelerator_state_dir))
-        self.accelerator.wait_for_everyone()
-        
-        if hasattr(self.accelerator, "end_training"):
-            self.accelerator.end_training()
-        
+        self._wait_for_everyone_if_distributed()
+
         print("Training completed!")
 
     def generate_image(self, prompt: str, conditioning_image_path: str, output_path: str = "output_controlnet.png") -> None:
         """Generate single image with ControlNet conditioning"""
-        
-        device = torch.device("cuda:0") # some reason crash if using multiple gpus inf, temp fix
-        torch.cuda.set_device(device)
+
+        device = self.accelerator.device
         sd15_source, use_local = self.get_model_source()
 
         controlnet = ControlNetModel.from_pretrained(self.model_dir, torch_dtype=torch.float16)
@@ -202,12 +213,10 @@ class ControlNetTrainer:
             local_files_only=use_local
         )
         pipe = pipe.to(device)
-        # pipe.enable_model_cpu_offload()
         pipe.enable_attention_slicing()
 
-        conditioning_image = Image.open(conditioning_image_path).convert("RGB").resize((512, 512)) # cond img
+        conditioning_image = Image.open(conditioning_image_path).convert("RGB").resize((512, 512))
 
-        # Generate
         image = pipe(
             prompt=prompt,
             image=conditioning_image,
@@ -215,22 +224,24 @@ class ControlNetTrainer:
             controlnet_conditioning_scale=1.0,
         ).images[0]
 
-        image.save(output_path)
-        print(f"Image saved to {output_path}")
+        if self.accelerator.is_main_process:
+            image.save(output_path)
+            print(f"Image saved to {output_path}")
+
+        self._wait_for_everyone_if_distributed()
 
     def generate_image_grid(
         self,
         prompt: str,
         conditioning_image_path: str,
         output_path: str = "output_controlnet_grid.png",
-        rows: int = 5,
-        cols: int = 5,
+        rows: int = 10,
+        cols: int = 10,
         num_inference_steps: int = 20,
         base_seed: int = 42) -> None:
 
         """Generate grid of images with different random seeds"""
-        device = torch.device("cuda:0") # some reason crash if using multiple gpus inf, temp fix
-        torch.cuda.set_device(device)
+        device = self.accelerator.device
         sd15_source, use_local = self.get_model_source()
 
         controlnet = ControlNetModel.from_pretrained(self.model_dir, torch_dtype=torch.float16)
@@ -246,8 +257,19 @@ class ControlNetTrainer:
         conditioning_image = Image.open(conditioning_image_path).convert("RGB").resize((512, 512))
 
         total = rows * cols
-        samples = []
+        rank = self.accelerator.process_index
+        world_size = self.accelerator.num_processes
+        output_path_obj = Path(output_path)
+        parts_dir = output_path_obj.parent / f"{output_path_obj.stem}_parts"
+
+        if self.accelerator.is_main_process:
+            parts_dir.mkdir(parents=True, exist_ok=True)
+        self._wait_for_everyone_if_distributed()
+
         for i in range(total):
+            if i % world_size != rank:
+                continue
+
             generator = torch.Generator(device=device).manual_seed(base_seed + i)
             sample = pipe(
                 prompt=prompt,
@@ -256,17 +278,31 @@ class ControlNetTrainer:
                 controlnet_conditioning_scale=1.0,
                 generator=generator,
             ).images[0]
-            samples.append(sample)
+            sample.save(parts_dir / f"sample_{i:04d}.png")
 
-        tile_w, tile_h = samples[0].size
-        grid = Image.new("RGB", (cols * tile_w, rows * tile_h))
-        for idx, sample in enumerate(samples):
-            x = (idx % cols) * tile_w
-            y = (idx // cols) * tile_h
-            grid.paste(sample, (x, y))
+        self._wait_for_everyone_if_distributed()
 
-        grid.save(output_path)
-        print(f"Grid image saved to {output_path}")
+        if self.accelerator.is_main_process:
+            sample_paths = [parts_dir / f"sample_{i:04d}.png" for i in range(total)]
+            samples = [Image.open(path).convert("RGB") for path in sample_paths]
+
+            tile_w, tile_h = samples[0].size
+            grid = Image.new("RGB", (cols * tile_w, rows * tile_h))
+            for idx, sample in enumerate(samples):
+                x = (idx % cols) * tile_w
+                y = (idx // cols) * tile_h
+                grid.paste(sample, (x, y))
+
+            grid.save(output_path)
+            print(f"Grid image saved to {output_path}")
+
+            for sample in samples:
+                sample.close()
+            for path in sample_paths:
+                path.unlink(missing_ok=True)
+            parts_dir.rmdir()
+
+        self._wait_for_everyone_if_distributed()
 
     def get_model_source(self) -> Tuple[str | Path, bool]:
         """Return local model source or fetch from remote repo"""

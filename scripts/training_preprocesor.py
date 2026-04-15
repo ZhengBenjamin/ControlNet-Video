@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.caption_dataset import caption_metadata_file
-from src.utils.video_to_freihand_skeleton import HandSkeletonizer
+from src.utils.video_to_skeleton import HandSkeletonizer
 
 DEFAULT_OUTPUT_SIZE = 512
 DEFAULT_CAPTION = "a hand gesture"
@@ -297,7 +297,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--line-thickness", type=int, default=2, help="Skeleton line thickness")
     parser.add_argument("--joint-radius", type=int, default=4, help="Skeleton joint radius")
     parser.add_argument("--disable-auto-caption", action="store_true", help="Skip BLIP captioning after preprocess")
-    parser.add_argument("--caption-batch-size", type=int, default=128, help="BLIP caption batch size")
+    parser.add_argument("--caption-batch-size", type=int, default=256, help="BLIP caption batch size")
     parser.add_argument("--caption-limit", type=int, default=0, help="Max captions to generate. 0 = all")
     parser.add_argument("--caption-force", action="store_true", help="Overwrite existing captions")
     parser.add_argument(

@@ -1,1 +1,2 @@
-from .preprocessor_freihand import *
+from .training_preprocesor import *
+from . import training_preprocesor

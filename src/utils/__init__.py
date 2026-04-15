@@ -1,3 +1,3 @@
-from .freihand_dataset import ControlNetImageDataset
+from .controlnet_dataset import ControlNetImageDataset
 from .blip_captioner import BLIPCaptioner
-from .video_to_freihand_skeleton import video_to_freihand_skeleton_images
+from .video_to_skeleton import video_to_freihand_skeleton_images
