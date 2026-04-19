@@ -87,7 +87,7 @@ class ControlNetTrainer:
         unet.requires_grad_(False)
         
         vae = vae.to(self.accelerator.device, dtype=torch.float16)
-        dataset = ControlNetImageDataset(data_root, tokenizer, size=256) # load dataset
+        dataset = ControlNetImageDataset(data_root, tokenizer, size=512) # load dataset
 
         if max_samples:
             dataset.metadata = dataset.metadata[:max_samples]
@@ -153,7 +153,14 @@ class ControlNetTrainer:
                     latents = latents * vae.config.scaling_factor
 
                     controlnet_image = batch["conditioning_pixel_values"] # encode condition
-                    
+
+                    # Conditioning dropout: zero ~10% of samples so the model learns
+                    # to generate without conditioning (enables scale-guided inference)
+                    dropout_mask = torch.bernoulli(
+                        torch.full((controlnet_image.shape[0], 1, 1, 1), 0.9, device=controlnet_image.device)
+                    ).to(controlnet_image.dtype)
+                    controlnet_image = controlnet_image * dropout_mask
+
                     with torch.no_grad():
                         encoder_hidden_states = text_encoder(batch["input_ids"])[0] # text encoder
 
@@ -180,6 +187,7 @@ class ControlNetTrainer:
                     loss = F.mse_loss(noise_pred.float(), noise.float())
 
                     self.accelerator.backward(loss)
+                    self.accelerator.clip_grad_norm_(controlnet.parameters(), 1.0)
                     optimizer.step()
                     lr_scheduler.step()
                     optimizer.zero_grad()
@@ -210,7 +218,8 @@ class ControlNetTrainer:
             sd15_source,
             controlnet=controlnet,
             torch_dtype=torch.float16,
-            local_files_only=use_local
+            local_files_only=use_local,
+            safety_checker=None
         )
         pipe = pipe.to(device)
         pipe.enable_attention_slicing()
@@ -220,7 +229,7 @@ class ControlNetTrainer:
         image = pipe(
             prompt=prompt,
             image=conditioning_image,
-            num_inference_steps=20,
+            num_inference_steps=30,
             controlnet_conditioning_scale=1.0,
         ).images[0]
 
@@ -237,7 +246,7 @@ class ControlNetTrainer:
         output_path: str = "output_controlnet_grid.png",
         rows: int = 10,
         cols: int = 10,
-        num_inference_steps: int = 20,
+        num_inference_steps: int = 30,
         base_seed: int = 42) -> None:
 
         """Generate grid of images with different random seeds"""

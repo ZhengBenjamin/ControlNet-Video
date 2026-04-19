@@ -1,0 +1,2 @@
+from .video_generator import VideoGenerator
+from .animatediff_generator import AnimateDiffVideoGenerator

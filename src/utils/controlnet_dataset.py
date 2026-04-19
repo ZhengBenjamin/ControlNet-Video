@@ -45,6 +45,6 @@ class ControlNetImageDataset(Dataset):
 
         return {
             "pixel_values": torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 127.5 - 1,
-            "conditioning_pixel_values": torch.from_numpy(np.array(conditioning_image)).permute(2, 0, 1).float() / 127.5 - 1,
+            "conditioning_pixel_values": torch.from_numpy(np.array(conditioning_image)).permute(2, 0, 1).float() / 255.0,
             "input_ids": text_inputs.input_ids.squeeze(),
         }
